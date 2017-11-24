@@ -1318,17 +1318,6 @@ func (s *systemtestSuite) SetUpSuiteVagrant(c *C) {
 	})
 }
 
-func (s *systemtestSuite) setGlobalSettings(c *C, mode string) {
-	c.Assert(s.cli.GlobalPost(&client.Global{FwdMode: mode,
-		Name:             "global",
-		NetworkInfraType: "default",
-		Vlans:            "1-4094",
-		Vxlans:           "1-10000",
-		ArpMode:          "proxy",
-		PvtSubnet:        "172.19.0.0/16",
-	}), IsNil)
-}
-
 func (s *systemtestSuite) SetUpTestBaremetal(c *C) {
 
 	for _, node := range s.nodes {
@@ -1376,10 +1365,17 @@ func (s *systemtestSuite) SetUpTestBaremetal(c *C) {
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
-
-	s.setGlobalSettings(c, s.fwdMode)
-	time.Sleep(40 * time.Second)
-
+	if s.fwdMode == "routing" {
+		c.Assert(s.cli.GlobalPost(&client.Global{FwdMode: "routing",
+			Name:             "global",
+			NetworkInfraType: "default",
+			Vlans:            "1-4094",
+			Vxlans:           "1-10000",
+			ArpMode:          "proxy",
+			PvtSubnet:        "172.19.0.0/16",
+		}), IsNil)
+		time.Sleep(40 * time.Second)
+	}
 }
 
 func (s *systemtestSuite) SetUpTestVagrant(c *C) {
@@ -1442,11 +1438,20 @@ func (s *systemtestSuite) SetUpTestVagrant(c *C) {
 		}
 	}
 
-	s.setGlobalSettings(c, s.fwdMode)
-	time.Sleep(120 * time.Second)
-
 	if s.basicInfo.Scheduler == kubeScheduler {
 		c.Assert(s.SetupDefaultNetwork(), IsNil)
+	}
+
+	if s.fwdMode == "routing" {
+		c.Assert(s.cli.GlobalPost(&client.Global{FwdMode: "routing",
+			Name:             "global",
+			NetworkInfraType: "default",
+			Vlans:            "1-4094",
+			Vxlans:           "1-10000",
+			ArpMode:          "proxy",
+			PvtSubnet:        "172.19.0.0/16",
+		}), IsNil)
+		time.Sleep(120 * time.Second)
 	}
 }
 

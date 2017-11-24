@@ -16,14 +16,12 @@ limitations under the License.
 package plugin
 
 import (
-	"fmt"
 	"github.com/Sirupsen/logrus"
 	"github.com/contiv/netplugin/core"
 	"github.com/contiv/netplugin/netmaster/mastercfg"
 	"github.com/contiv/netplugin/utils"
 	"github.com/contiv/netplugin/utils/netutils"
 	"sync"
-	"time"
 )
 
 // implements the generic Plugin interface
@@ -52,6 +50,8 @@ type NetPlugin struct {
 	PluginConfig  Config
 }
 
+const defaultPvtSubnet = 0xac130000
+
 // Init initializes the NetPlugin instance via the configuration string passed.
 func (p *NetPlugin) Init(pluginConfig Config) error {
 	var err error
@@ -75,10 +75,8 @@ func (p *NetPlugin) Init(pluginConfig Config) error {
 
 	// set state driver in instance info
 	pluginConfig.Instance.StateDriver = p.StateDriver
-	err = InitGlobalSettings(p.StateDriver, &pluginConfig.Instance)
-	if err != nil {
-		return err
-	}
+
+	InitGlobalSettings(p.StateDriver, &pluginConfig.Instance)
 
 	// initialize network driver
 	p.NetworkDriver, err = utils.NewNetworkDriver(pluginConfig.Drivers.Network, &pluginConfig.Instance)
@@ -305,59 +303,27 @@ func (p *NetPlugin) Reinit(cfg Config) {
 }
 
 //InitGlobalSettings initializes cluster-wide settings (e.g. fwd-mode)
-func InitGlobalSettings(stateDriver core.StateDriver, inst *core.InstanceInfo) error {
-
-	/*
-		Query global settings from state store
-		1. if forward mode or private net is empty, retry after 1 seccond
-		2. if forward mode doesn't match, return error
-		3. if stored private net is wrong, return error
-	*/
+func InitGlobalSettings(stateDriver core.StateDriver, inst *core.InstanceInfo) {
 
 	gCfg := mastercfg.GlobConfig{}
 	gCfg.StateDriver = stateDriver
-
-	// wait until able to get fwd mode and private subnet
-	for {
-		if err := gCfg.Read(""); err != nil {
-			logrus.Errorf("Error reading global settings from cluster store, error: %v", err.Error())
-		} else {
-			if gCfg.FwdMode == "" || gCfg.PvtSubnet == "" {
-				if gCfg.FwdMode == "" {
-					logrus.Warnf("No forwarding mode found from cluster store")
-				}
-				if gCfg.PvtSubnet == "" {
-					logrus.Warnf("No private subnet found from cluster store")
-				}
-
-			} else {
-				logrus.Infof("Got global forwarding mode: %v", gCfg.FwdMode)
-				logrus.Infof("Got global private subnet: %v", gCfg.PvtSubnet)
-				break
-			}
-		}
-		logrus.Warnf("Sleep 1 second and retry pulling global settings")
-		time.Sleep(1 * time.Second)
+	err := gCfg.Read("")
+	if err != nil {
+		logrus.Errorf("Error reading forwarding mode from cluster store")
+		inst.FwdMode = "bridge"
+		inst.HostPvtNW = defaultPvtSubnet
+		return
 	}
 
-	// make sure local config matches netmaster config
-	if inst.FwdMode != "" && inst.FwdMode != gCfg.FwdMode {
-		err := fmt.Errorf("netplugin's local forward mode %q doesn't match global settings %q", inst.FwdMode, gCfg.FwdMode)
-		logrus.Errorf(err.Error())
-		return err
-	}
 	inst.FwdMode = gCfg.FwdMode
-
-	logrus.Infof("Using forwarding mode: %v", inst.FwdMode)
 	net, err := netutils.CIDRToMask(gCfg.PvtSubnet)
 	if err != nil {
-		err := fmt.Errorf("error convert private subnet %v from CIDR to mask, error %v", gCfg.PvtSubnet, err.Error())
-		logrus.Errorf(err.Error())
-		return err
+		logrus.Errorf("%s %v, will use default", gCfg.PvtSubnet, err)
+		inst.HostPvtNW = defaultPvtSubnet
+	} else {
+		inst.HostPvtNW = net
+		logrus.Infof("HostPvtNW: %v", net)
 	}
-	inst.HostPvtNW = net
-	logrus.Infof("Using host private subnet: %v", gCfg.PvtSubnet)
-	return nil
 }
 
 //AddSvcSpec adds k8 service spec

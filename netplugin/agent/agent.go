@@ -50,7 +50,7 @@ func NewAgent(pluginConfig *plugin.Config) *Agent {
 	netPlugin := &plugin.NetPlugin{}
 
 	// init cluster state
-	err := cluster.Init(pluginConfig.Drivers.State, []string{opts.DbURL})
+	err := cluster.Init(opts.DbURL)
 	if err != nil {
 		log.Fatalf("Error initializing cluster. Err: %v", err)
 	}
@@ -139,7 +139,7 @@ func (ag *Agent) ProcessCurrentState() error {
 	if err == nil {
 		for idx, epgCfg := range epgCfgs {
 			epg := epgCfg.(*mastercfg.EndpointGroupState)
-			log.Infof("Read epg key[%d] %s, populating state \n", idx, epg.GroupName)
+			log.Infof("Read epg key[%d] %s, for group %s, populating state \n", idx, epg.GroupName)
 			processEpgEvent(ag.netPlugin, opts, epg.ID, false)
 		}
 	}

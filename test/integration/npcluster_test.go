@@ -61,20 +61,17 @@ func NewNPCluster(its *integTestSuite) (*NPCluster, error) {
 	}
 
 	// initialize the plugin config
-	// TODO: remove the hack
-	dbDriver := strings.Split(its.clusterStore, "://")[0]
-	dbURL := strings.Replace(its.clusterStore, dbDriver, "http", 1)
 	pluginConfig := plugin.Config{
 		Drivers: plugin.Drivers{
 			Network: "ovs",
-			State:   dbDriver,
+			State:   strings.Split(its.clusterStore, "://")[0],
 		},
 		Instance: core.InstanceInfo{
 			HostLabel:  hostLabel,
 			CtrlIP:     localIP,
 			VtepIP:     localIP,
 			UplinkIntf: []string{"eth2"},
-			DbURL:      dbURL,
+			DbURL:      its.clusterStore,
 			PluginMode: "test",
 		},
 	}
@@ -88,19 +85,21 @@ func NewNPCluster(its *integTestSuite) (*NPCluster, error) {
 	// Wait for a second for master to initialize
 	time.Sleep(10 * time.Second)
 
-	err = contivModel.CreateGlobal(&contivModel.Global{
-		Key:              "global",
-		Name:             "global",
-		NetworkInfraType: its.fabricMode,
-		Vlans:            "1-4094",
-		Vxlans:           "1-10000",
-		FwdMode:          its.fwdMode,
-		ArpMode:          its.arpMode,
-		PvtSubnet:        "172.19.0.0/16",
-	})
-
-	if err != nil {
-		log.Fatalf("Error creating global state. Err: %v", err)
+	// set forwarding mode if required
+	if its.fwdMode != "bridge" || its.fabricMode != "default" {
+		err := contivModel.CreateGlobal(&contivModel.Global{
+			Key:              "global",
+			Name:             "global",
+			NetworkInfraType: its.fabricMode,
+			Vlans:            "1-4094",
+			Vxlans:           "1-10000",
+			FwdMode:          its.fwdMode,
+			ArpMode:          its.arpMode,
+			PvtSubnet:        "172.19.0.0/16",
+		})
+		if err != nil {
+			log.Fatalf("Error creating global state. Err: %v", err)
+		}
 	}
 
 	// Create a new agent

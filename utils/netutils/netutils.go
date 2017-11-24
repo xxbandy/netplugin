@@ -921,16 +921,23 @@ func HostIPToGateway(hostIP string) (string, error) {
 	return ip[0] + "." + ip[1] + ".255.254", nil
 }
 
-// CIDRToMask converts a CIDR to corresponding network number
+// CIDRToMask converts a mask to corresponding netmask
 func CIDRToMask(cidr string) (int, error) {
-	_, net, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return -1, err
+
+	n := strings.Split(cidr, "/")
+	if len(n) != 2 {
+		return -1, core.Errorf("Error bad cidr %s", cidr)
 	}
-	ip := net.IP
+
+	ip := net.ParseIP(n[0])
+	if ip == nil {
+		return -1, core.Errorf("Error bad cidr %s", cidr)
+	}
+
 	if len(ip) == 16 {
 		return int(binary.BigEndian.Uint32(ip[12:16])), nil
 	}
+
 	return int(binary.BigEndian.Uint32(ip)), nil
 }
 

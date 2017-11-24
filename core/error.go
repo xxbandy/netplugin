@@ -17,6 +17,7 @@ package core
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"runtime"
 	"strings"
@@ -37,12 +38,17 @@ type Error struct {
 // Error() allows *core.Error to present the `error` interface.
 func (e *Error) Error() string {
 	var ret string
-	ret = e.desc + "\n"
 
-	// TODO: use github.com/pkg/errors
-	for _, stack := range e.stack {
-		ret += fmt.Sprintf("%s [%s %d]\n", stack.fun, stack.file, stack.line)
+	if os.Getenv("CONTIV_TRACE") != "" {
+		ret = e.desc + "\n"
+
+		for _, stack := range e.stack {
+			ret += fmt.Sprintf("%s [%s %d]\n", stack.fun, stack.file, stack.line)
+		}
+	} else {
+		ret = fmt.Sprintf("%s [%s %s %d]", e.desc, e.stack[0].fun, e.stack[0].file, e.stack[0].line)
 	}
+
 	return ret
 }
 

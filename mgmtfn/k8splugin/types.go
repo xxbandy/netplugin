@@ -20,6 +20,8 @@ type ListMeta struct {
 }
 
 // ObjectReference contains enough information to let you inspect or modify the referred object.
+
+//ObjectReference结构体包含了足够的信息，让用户去检查或者修改被引用的对象。
 type ObjectReference struct {
 	// Kind of the referent.
 	// More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds
@@ -369,6 +371,8 @@ type ServiceList struct {
 //       Ports: [{"name": "a", "port": 93}, {"name": "b", "port": 76}]
 //     },
 //  ]
+
+//定义各种Endpoints相关的规则
 type Endpoints struct {
 	TypeMeta `json:",inline"`
 	// Standard object's metadata.
@@ -398,6 +402,7 @@ type EndpointSubset struct {
 }
 
 // EndpointAddress is a tuple that describes single IP address.
+// EndpointAddress 是一个用来描述单个ip地址的字典
 type EndpointAddress struct {
 	// The IP of this endpoint.
 	// May not be loopback (127.0.0.0/8), link-local (169.254.0.0/16),
@@ -409,7 +414,7 @@ type EndpointAddress struct {
 	TargetRef *ObjectReference `json:"targetRef,omitempty"`
 }
 
-// EndpointPort is a tuple that describes a single port.
+// EndpointPort 用来描述单个端口的字典.
 type EndpointPort struct {
 	// The name of this port (corresponds to ServicePort.Name).
 	// Must be a DNS_LABEL.
@@ -425,7 +430,7 @@ type EndpointPort struct {
 	Protocol Protocol `json:"protocol,omitempty"`
 }
 
-// EndpointsList is a list of endpoints.
+// EndpointsList 是一个endpoints的列表
 type EndpointsList struct {
 	TypeMeta `json:",inline"`
 	// Standard list metadata.
@@ -437,6 +442,7 @@ type EndpointsList struct {
 }
 
 // NodeSpec describes the attributes that a node is created with.
+// NodeSpec 描述了一个node是否被创建的属性
 type NodeSpec struct {
 	// PodCIDR represents the pod IP range assigned to the node.
 	PodCIDR string `json:"podCIDR,omitempty"`

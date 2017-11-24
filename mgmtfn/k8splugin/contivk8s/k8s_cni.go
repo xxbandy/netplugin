@@ -24,9 +24,10 @@ import (
 	"strings"
 
 	"github.com/contiv/netplugin/mgmtfn/k8splugin/cniapi"
+	//contivk8s自己定义了一个操作network的client
 	"github.com/contiv/netplugin/mgmtfn/k8splugin/contivk8s/clients"
 	"github.com/contiv/netplugin/version"
-
+	//记录日志的模块
 	logger "github.com/Sirupsen/logrus"
 	ip "github.com/appc/cni/pkg/ip"
 	cni "github.com/appc/cni/pkg/plugin"

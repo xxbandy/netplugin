@@ -22,10 +22,7 @@ import (
 	"strings"
 
 	"encoding/json"
-	"io/ioutil"
-	"net/http"
-
-	contivModel "github.com/contiv/contivmodel"
+	"github.com/contiv/contivmodel"
 	"github.com/contiv/netplugin/core"
 	"github.com/contiv/netplugin/drivers"
 	"github.com/contiv/netplugin/netmaster/docknet"
@@ -37,6 +34,8 @@ import (
 	"github.com/contiv/netplugin/objdb/modeldb"
 	"github.com/contiv/netplugin/utils"
 	"github.com/contiv/netplugin/utils/netutils"
+	"io/ioutil"
+	"net/http"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
@@ -117,7 +116,7 @@ func NewAPIController(router *mux.Router, objdbClient objdb.API, storeURL string
 			NetworkInfraType: "default",
 			Vlans:            "1-4094",
 			Vxlans:           "1-10000",
-			FwdMode:          "", // set empty fwd mode by default
+			FwdMode:          "bridge",
 			ArpMode:          "proxy",
 			PvtSubnet:        defHostPvtNet,
 		})
@@ -226,35 +225,21 @@ func (ac *APIController) GlobalUpdate(global, params *contivModel.Global) error 
 
 	gCfg := &gstate.Cfg{}
 	gCfg.StateDriver = stateDriver
-	numVlans, _ := gCfg.GetVlansInUse()
-	numVxlans, _ := gCfg.GetVxlansInUse()
+	numVlans, vlansInUse := gCfg.GetVlansInUse()
+	numVxlans, vxlansInUse := gCfg.GetVxlansInUse()
 
 	// Build global config
 	globalCfg := intent.ConfigGlobal{}
-
-	// Generate helpful error message when networks exist
-	errExistingNetworks := func(optionLabel string) error {
-		msgs := []string{}
-		if numVlans > 0 {
-			msgs = append(msgs, fmt.Sprintf("%d vlans", numVlans))
-		}
-		if numVxlans > 0 {
-			msgs = append(msgs, fmt.Sprintf("%d vxlans", numVxlans))
-		}
-		msg := fmt.Sprintf("Unable to update %s due to existing %s",
-			optionLabel, strings.Join(msgs, " and "))
-		log.Errorf(msg)
-		return fmt.Errorf(msg)
-	}
 
 	//check for change in forwarding mode
 	if global.FwdMode != params.FwdMode {
 		//check if there exists any non default network and tenants
 		if numVlans+numVxlans > 0 {
-			return errExistingNetworks("forwarding mode")
+			log.Errorf("Unable to update forwarding mode due to existing %d vlans and %d vxlans", numVlans, numVxlans)
+			return fmt.Errorf("please delete %v vlans and %v vxlans before changing forwarding mode", vlansInUse, vxlansInUse)
 		}
 		if global.FwdMode == "routing" {
-			//check if any bgp configurations exists.
+			//check if  any bgp configurations exists.
 			bgpCfgs := &mastercfg.CfgBgpState{}
 			bgpCfgs.StateDriver = stateDriver
 			cfgs, _ := bgpCfgs.ReadAll()
@@ -279,7 +264,8 @@ func (ac *APIController) GlobalUpdate(global, params *contivModel.Global) error 
 	}
 	if global.PvtSubnet != params.PvtSubnet {
 		if (global.PvtSubnet != "" || params.PvtSubnet != defHostPvtNet) && numVlans+numVxlans > 0 {
-			return errExistingNetworks("private subnet")
+			log.Errorf("Unable to update provate subnet due to existing networks")
+			return fmt.Errorf("please delete %v vlans and %v vxlans before changing private subnet", vlansInUse, vxlansInUse)
 		}
 		globalCfg.PvtSubnet = params.PvtSubnet
 	}
@@ -1036,11 +1022,6 @@ func (ac *APIController) EndpointGroupDelete(endpointGroup *contivModel.Endpoint
 // NetworkCreate creates network
 func (ac *APIController) NetworkCreate(network *contivModel.Network) error {
 	log.Infof("Received NetworkCreate: %+v", network)
-
-	// Make sure global settings is valid
-	if err := validateGlobalConfig(network.Encap); err != nil {
-		return fmt.Errorf("Global configuration is not ready: %v", err.Error())
-	}
 
 	// Make sure tenant exists
 	if network.TenantName == "" {
@@ -2343,21 +2324,4 @@ func validatePorts(ports []string) bool {
 		}
 	}
 	return true
-}
-
-func validateGlobalConfig(netmode string) error {
-	globalConfig := contivModel.FindGlobal("global")
-	if globalConfig == nil {
-		return errors.New("global configuration is not ready")
-	}
-	if globalConfig.FwdMode == "" {
-		return errors.New("global forwarding mode is not set")
-	}
-	if strings.ToLower(netmode) == "vlan" && globalConfig.Vlans == "" {
-		return errors.New("global vlan range is not set")
-	}
-	if strings.ToLower(netmode) == "vxlan" && globalConfig.Vxlans == "" {
-		return errors.New("global vxlan range is not set")
-	}
-	return nil
 }

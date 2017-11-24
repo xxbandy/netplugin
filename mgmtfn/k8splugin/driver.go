@@ -15,13 +15,21 @@ limitations under the License.
 
 package k8splugin
 
+//封装了netmaster的相关接口，用来直接对接contiv本身网络的驱动
+//核心点在于github.com/contiv/netplugin/netmaster/intent
+// github.com/contiv/netplugin/netmaster/master
+// github.com/contiv/netplugin/netplugin/cluster
+// github.com/vishvananda/netlink
+// github.com/contiv/netplugin/utils
+// github.com/contiv/netplugin/utils/netutils
+
 import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	osexec "os/exec"
-	"strconv"
+	"strconv" //数字转字符
 	"strings"
 	"time"
 
@@ -36,6 +44,7 @@ import (
 )
 
 // epSpec contains the spec of the Endpoint to be created
+// epSpec 包含了已经创建的endpoint的一些规范，比如租户，网络，分组，endpoint的id以及name等相关信息
 type epSpec struct {
 	Tenant     string `json:"tenant,omitempty"`
 	Network    string `json:"network,omitempty"`
@@ -45,6 +54,8 @@ type epSpec struct {
 }
 
 // epAttr contains the assigned attributes of the created ep
+// epAttr 包含一些给已经创建的endpoint的分配属性，主要是网络相关，比如ip地址，PortName(确定不是pod？)，网关以及ipv6地址和网关
+
 type epAttr struct {
 	IPAddress   string
 	PortName    string
@@ -54,13 +65,39 @@ type epAttr struct {
 }
 
 // epCleanUp deletes the ep from netplugin and netmaster
+// epCleanUp 从netplugin和netmaster中删除一个endpoint
 func epCleanUp(req *epSpec) error {
 	// first delete from netplugin
 	// ignore any errors as this is best effort
+	// 从netplugin第一次删除 忽略任何错误
+	//构造一个netID, network+tenant
+	//
+	//Tenant   Network       Nw Type  Encap type  Packet tag  Subnet                         Gateway        IPv6Subnet  IPv6Gateway  Cfgd Tag
+	//------   -------       -------  ----------  ----------  -------                        ------         ----------  -----------  ---------
+	//default  k8s-data-net  data     vlan        110         10.241.20.16-10.241.20.240/24  10.241.20.254
+	//
+	//
+
+	//netID := k8s-data-net.default
 	netID := req.Network + "." + req.Tenant
+
+	// netPlugin.DeleteEndpoint("k8s-data-net.default-"+endpointID)
+	// 疑问：这个函数是从哪里继承进来(netPlugin.DeleteEndpoint)
+
 	pluginErr := netPlugin.DeleteEndpoint(netID + "-" + req.EndpointID)
 
 	// now delete from master
+	// 从master中删除
+	//github.com/contiv/netplugin/netmaster/master/api.go
+	//type DeleteEndpointRequest struct {
+	//	TenantName  string // tenant name
+	//	NetworkName string // network name
+	//  ServiceName string // service name
+	//  EndpointID  string // Unique identifier for the endpoint
+	//  IPv4Address string // Allocated IPv4 address for the endpoint
+	//	}
+
+	//定义一个删除endpoint的请求数据
 	delReq := master.DeleteEndpointRequest{
 		TenantName:  req.Tenant,
 		NetworkName: req.Network,
@@ -68,7 +105,19 @@ func epCleanUp(req *epSpec) error {
 		EndpointID:  req.EndpointID,
 	}
 
+	//定义一个从contiv删除ep的响应数据
+	//type DeleteEndpointResponse struct {
+	//	EndpointConfig mastercfg.CfgEndpointState // Endpoint config
+	//	}
 	var delResp master.DeleteEndpointResponse
+
+	// 源码文件https://github.com/contiv/netplugin/blob/master/netplugin/cluster/cluster.go
+	// MasterPostReq 像master节点构造一个post请求
+	//func MasterPostReq(path string, req interface{}, resp interface{}) error {
+	//	return masterReq(path, req, resp, false)
+	//}
+
+	//func MasterPostReq(path string, req interface{}, resp interface{})
 	masterErr := cluster.MasterPostReq("/plugin/deleteEndpoint", &delReq, &delResp)
 
 	if pluginErr != nil {

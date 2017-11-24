@@ -18,8 +18,8 @@ package state
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
+	"strings"
 	"time"
 
 	"golang.org/x/net/context"
@@ -53,28 +53,19 @@ type EtcdStateDriver struct {
 // Init the driver with a core.Config.
 func (d *EtcdStateDriver) Init(instInfo *core.InstanceInfo) error {
 	var err error
-	var endpoint *url.URL
 
-	if instInfo == nil || instInfo.DbURL == "" {
-		return errors.New("no etcd config found")
+	if instInfo == nil || !strings.Contains(instInfo.DbURL, "etcd://") {
+		return errors.New("invalid etcd config")
 	}
-	endpoint, err = url.Parse(instInfo.DbURL)
-	if err != nil {
-		return err
-	}
-	if endpoint.Scheme == "etcd" {
-		endpoint.Scheme = "http"
-	} else if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-		return core.Errorf("invalid etcd URL scheme %q", endpoint.Scheme)
-	}
-	// TODO: support multi-endpoints
+
+	etcdURL := strings.Replace(instInfo.DbURL, "etcd://", "http://", 1)
 	etcdConfig := client.Config{
-		Endpoints: []string{endpoint.String()},
+		Endpoints: []string{etcdURL},
 	}
 
 	d.Client, err = client.New(etcdConfig)
 	if err != nil {
-		log.Fatalf("error creating etcd client. Err: %v", err)
+		log.Fatalf("Error creating etcd client. Err: %v", err)
 	}
 
 	// Create keys api
