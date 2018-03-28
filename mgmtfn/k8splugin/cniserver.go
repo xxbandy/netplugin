@@ -131,6 +131,7 @@ func InitCNIServer(netplugin *plugin.NetPlugin) error {
 
 	
 	// 为cni注册一个handlers，可以看到真正给pod执行创建net的是utils.MakeHTTPHandler(addPod)
+	// https://github.com/contiv/netplugin/blob/master/utils/httputils.go#L32
 	t := router.Headers("Content-Type", "application/json").Methods("POST").Subrouter()
 	t.HandleFunc(cniapi.EPAddURL, utils.MakeHTTPHandler(addPod))
 	t.HandleFunc(cniapi.EPDelURL, utils.MakeHTTPHandler(deletePod))
