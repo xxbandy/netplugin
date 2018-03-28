@@ -133,17 +133,17 @@ func epCleanUp(req *epSpec) error {
 	return masterErr
 }
 
-// createEP creates the specified EP in contiv
+// createEP 在contiv内部创建指定的Endpoint 并获取相关的网络信息，比如ip,mask,gw等
 func createEP(req *epSpec) (*epAttr, error) {
 
-	// if the ep already exists, treat as error for now.
+	// 如果ep存在，抛出一个错误(网路号+.+租户号码)
 	netID := req.Network + "." + req.Tenant
 	ep, err := utils.GetEndpoint(netID + "-" + req.EndpointID)
 	if err == nil {
 		return nil, fmt.Errorf("the EP %s already exists", req.EndpointID)
 	}
 
-	// Build endpoint request
+	// 构建一个endpoint的请求
 	mreq := master.CreateEndpointRequest{
 		TenantName:   req.Tenant,
 		NetworkName:  req.Network,
@@ -158,6 +158,7 @@ func createEP(req *epSpec) (*epAttr, error) {
 	}
 
 	var mresp master.CreateEndpointResponse
+	//发送给master请求来创建endpoint,如果失败则清理网路，保证
 	err = cluster.MasterPostReq("/plugin/createEndpoint", &mreq, &mresp)
 	if err != nil {
 		epCleanUp(req)
@@ -168,6 +169,7 @@ func createEP(req *epSpec) (*epAttr, error) {
 	log.Infof("Got endpoint create resp from master: %+v", mresp)
 
 	// Ask netplugin to create the endpoint
+	//告知netplugin去创建endpoint(master和plugin同时创建是为了一致性对比？)
 	err = netPlugin.CreateEndpoint(netID + "-" + req.EndpointID)
 	if err != nil {
 		log.Errorf("Endpoint creation failed. Error: %s", err)
@@ -175,6 +177,7 @@ func createEP(req *epSpec) (*epAttr, error) {
 		return nil, err
 	}
 
+	//获取创建好的endpoint
 	ep, err = utils.GetEndpoint(netID + "-" + req.EndpointID)
 	if err != nil {
 		epCleanUp(req)
@@ -183,6 +186,7 @@ func createEP(req *epSpec) (*epAttr, error) {
 
 	log.Debug(ep)
 	// need to get the subnetlen from nw state.
+	//从nw状态中获取子网长度subnetlen
 	nw, err := utils.GetNetwork(netID)
 	if err != nil {
 		epCleanUp(req)
@@ -190,6 +194,7 @@ func createEP(req *epSpec) (*epAttr, error) {
 	}
 
 	epResponse := epAttr{}
+	//port，ip，wg等香菇眼信息的赋值
 	epResponse.PortName = ep.PortName
 	epResponse.IPAddress = ep.IPAddress + "/" + strconv.Itoa(int(nw.SubnetLen))
 	epResponse.Gateway = nw.Gateway
@@ -203,8 +208,42 @@ func createEP(req *epSpec) (*epAttr, error) {
 }
 
 // getLink is a wrapper that fetches the netlink corresponding to the ifname
+// getLink用来接收获取netlink，等同于ifname
+/*
+vishvananda/netlink/link.go
+返回接口地址
+type Link interface {
+	Attrs() *LinkAttrs
+	Type() string
+}
+
+
+type LinkAttrs struct {
+	Index        int
+	MTU          int
+	TxQLen       int // Transmit Queue Length
+	Name         string
+	HardwareAddr net.HardwareAddr
+	Flags        net.Flags
+	RawFlags     uint32
+	ParentIndex  int         // index of the parent link device
+	MasterIndex  int         // must be the index of a bridge
+	Namespace    interface{} // nil | NsPid | NsFd
+	Alias        string
+	Statistics   *LinkStatistics
+	Promisc      int
+	Xdp          *LinkXdp
+	EncapType    string
+	Protinfo     *Protinfo
+	OperState    LinkOperState
+	NetNsID      int
+	NumTxQueues  int
+	NumRxQueues  int
+}
+*/
+
 func getLink(ifname string) (netlink.Link, error) {
-	// find the link
+	// 查找一个link
 	link, err := netlink.LinkByName(ifname)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Link not found") {
@@ -213,6 +252,7 @@ func getLink(ifname string) (netlink.Link, error) {
 		}
 		// try once more as sometimes (somehow) link creation is taking
 		// sometime, causing link not found error
+		// 尝试等待一分钟，再次进行获取避免再次查找后仍然无法找到link
 		time.Sleep(1 * time.Second)
 		link, err = netlink.LinkByName(ifname)
 		if err != nil {
@@ -223,9 +263,11 @@ func getLink(ifname string) (netlink.Link, error) {
 	return link, err
 }
 
-// nsToPID is a utility that extracts the PID from the netns
+// nsToPID 是一个从netns中提取PID的工具
+// ns="/proc/35938/ns/net" 提取pid的过程
 func nsToPID(ns string) (int, error) {
 	// Make sure ns is well formed
+	// 确定ns是一个可用的状态
 	ok := strings.HasPrefix(ns, "/proc/")
 	if !ok {
 		return -1, fmt.Errorf("invalid nw name space: %v", ns)
@@ -235,15 +277,23 @@ func nsToPID(ns string) (int, error) {
 	return strconv.Atoi(elements[2])
 }
 
+//将pid移植到NS中
 func moveToNS(pid int, ifname string) error {
-	// find the link
+	// 查找一个link
 	link, err := getLink(ifname)
 	if err != nil {
 		log.Errorf("unable to find link %q. Error %q", ifname, err)
 		return err
 	}
 
-	// move to the desired netns
+	// 将pid移动到期望的ns
+	/*
+		等同于 `ip link set $link netns $pid`
+		func LinkSetNsPid(link Link, nspid int) error {
+		return pkgHandle.LinkSetNsPid(link, nspid)
+		}
+
+	*/
 	err = netlink.LinkSetNsPid(link, pid)
 	if err != nil {
 		log.Errorf("unable to move interface %s to pid %d. Error: %s",
@@ -255,24 +305,58 @@ func moveToNS(pid int, ifname string) error {
 }
 
 // setIfAttrs sets the required attributes for the container interface
+// setIfAttrs 为容器设定一些相关的网络信息
 func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
+	//查看nsenter的绝对路径
+	//nsenter是用一个ns中的其他进程来运行一个程序
 	nsenterPath, err := osexec.LookPath("nsenter")
 	if err != nil {
 		return err
 	}
+	//获取ip的二进制程序绝对路径
 	ipPath, err := osexec.LookPath("ip")
 	if err != nil {
 		return err
 	}
 
-	// find the link
+	// 获取link相关信息，主要是网卡相关信息
 	link, err := getLink(ifname)
 	if err != nil {
 		log.Errorf("unable to find link %q. Error %q", ifname, err)
 		return err
 	}
 
-	// move to the desired netns
+	// 移动到期望的ns里面
+	/*
+		//将网卡设备link放入一个新的netns,pid必须是一个运行的进程，等同于"ip link set $link netns $pid"
+		func LinkSetNsPid(link Link, nspid int) error {
+			return pkgHandle.LinkSetNsPid(link, nspid)
+		}
+
+		// LinkSetNsPid puts the device into a new network namespace. The
+		// pid must be a pid of a running process.
+		// Equivalent to: `ip link set $link netns $pid`
+		func (h *Handle) LinkSetNsPid(link Link, nspid int) error {
+			base := link.Attrs()
+			h.ensureIndex(base)
+			req := h.newNetlinkRequest(syscall.RTM_SETLINK, syscall.NLM_F_ACK)
+
+			msg := nl.NewIfInfomsg(syscall.AF_UNSPEC)
+			msg.Index = int32(base.Index)
+			req.AddData(msg)
+
+			b := make([]byte, 4)
+			native.PutUint32(b, uint32(nspid))
+
+			data := nl.NewRtAttr(syscall.IFLA_NET_NS_PID, b)
+			req.AddData(data)
+
+			_, err := req.Execute(syscall.NETLINK_ROUTE, 0)
+			return err
+		}
+
+	*/
+	//将网卡设备link放入一个新的netns,pid必须是一个运行的进程，等同于"ip link set $link netns $pid"
 	err = netlink.LinkSetNsPid(link, pid)
 	if err != nil {
 		log.Errorf("unable to move interface %s to pid %d. Error: %s",
@@ -280,8 +364,11 @@ func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
 		return err
 	}
 
-	// rename to the desired ifname
-	nsPid := fmt.Sprintf("%d", pid)
+	// 重新命名为一个新的ifname
+	// nsenter -t $PID -n -F -- /sbin/ip link set dev docker0 name jdf@docker0
+	nsPid := fmt.Sprintf("%d", pid) //数字转字符
+	//os/exec
+	//func (c *Cmd) CombinedOutput() ([]byte, error)
 	rename, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", ipPath, "link",
 		"set", "dev", ifname, "name", newname).CombinedOutput()
 	if err != nil {
@@ -291,7 +378,8 @@ func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
 	}
 	log.Infof("Output from rename: %v", rename)
 
-	// set the ip address
+	// 分配ip地址
+	// nsenter -t $pid -n -F -- /sbin/ip address add cidr dev jdf@docker0
 	assignIP, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", ipPath,
 		"address", "add", cidr, "dev", newname).CombinedOutput()
 
@@ -302,6 +390,7 @@ func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
 	}
 	log.Infof("Output from ip assign: %v", assignIP)
 
+	//设置ipv6地址
 	if cidr6 != "" {
 		out, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", ipPath,
 			"-6", "address", "add", cidr6, "dev", newname).CombinedOutput()
@@ -313,7 +402,9 @@ func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
 		log.Infof("Output of IPv6 assign: %v", out)
 	}
 
-	// Finally, mark the link up
+	// 将网卡启动
+	// set，mark the device up
+	// nsenter -t $pid -n -F -- /sbin/ip link set dev jdf@docker0 up
 	bringUp, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", ipPath,
 		"link", "set", "dev", newname, "up").CombinedOutput()
 
