@@ -129,7 +129,8 @@ func InitCNIServer(netplugin *plugin.NetPlugin) error {
 
 	router := mux.NewRouter()
 
-	// register handlers for cni
+	
+	// 为cni注册一个handlers，可以看到真正给pod执行创建net的是utils.MakeHTTPHandler(addPod)
 	t := router.Headers("Content-Type", "application/json").Methods("POST").Subrouter()
 	t.HandleFunc(cniapi.EPAddURL, utils.MakeHTTPHandler(addPod))
 	t.HandleFunc(cniapi.EPDelURL, utils.MakeHTTPHandler(deletePod))
