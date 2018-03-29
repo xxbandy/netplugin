@@ -418,6 +418,7 @@ func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error {
 
 }
 
+//添加静态路由
 func addStaticRoute(pid int, subnet, intfName string) error {
 	nsenterPath, err := osexec.LookPath("nsenter")
 	if err != nil {
@@ -430,6 +431,7 @@ func addStaticRoute(pid int, subnet, intfName string) error {
 	}
 
 	nsPid := fmt.Sprintf("%d", pid)
+	//等同于nnsenter -t $pid -n -F -- /sbin/ip route add subnet dev jdf@docker0
 	_, err = osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", ipPath,
 		"route", "add", subnet, "dev", intfName).CombinedOutput()
 
@@ -442,7 +444,7 @@ func addStaticRoute(pid int, subnet, intfName string) error {
 	return nil
 }
 
-// setDefGw sets the default gateway for the container namespace
+// setDefGw 为容器的namespace设置默认网关
 func setDefGw(pid int, gw, gw6, intfName string) error {
 	nsenterPath, err := osexec.LookPath("nsenter")
 	if err != nil {
@@ -452,8 +454,9 @@ func setDefGw(pid int, gw, gw6, intfName string) error {
 	if err != nil {
 		return err
 	}
-	// set default gw
+	// 设置默认网关
 	nsPid := fmt.Sprintf("%d", pid)
+	//等同于 nsenter -t $pid -n -F -- /sbin/route add default gw gateway jdf@docker
 	out, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", routePath, "add",
 		"default", "gw", gw, intfName).CombinedOutput()
 	if err != nil {
@@ -461,6 +464,7 @@ func setDefGw(pid int, gw, gw6, intfName string) error {
 		return nil
 	}
 
+	//设置IPV6的网关
 	if gw6 != "" {
 		out, err := osexec.Command(nsenterPath, "-t", nsPid, "-n", "-F", "--", routePath,
 			"-6", "add", "default", "gw", gw6, intfName).CombinedOutput()
@@ -473,11 +477,11 @@ func setDefGw(pid int, gw, gw6, intfName string) error {
 	return nil
 }
 
-// getEPSpec gets the EP spec using the pod attributes
+// getEPSpec 使用pod的属性信息获取EP的相关信息
 func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
 	resp := epSpec{}
 
-	// Get labels from the kube api server
+	// 从kubeapi server获取相关的label
 	epg, err := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
 		"io.contiv.net-group")
 	if err != nil {
@@ -486,6 +490,7 @@ func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
 	}
 
 	// Safe to ignore the error return for subsequent invocations of GetPodLabel
+	// 安全的忽略随后的GetPodLabel的调用
 	netw, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
 		"io.contiv.network")
 	tenant, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
@@ -506,7 +511,7 @@ func setErrorResp(resp *cniapi.RspAddPod, msg string, err error) {
 	resp.ErrInfo = fmt.Sprintf("Err: %v", err)
 }
 
-// addPod is the handler for pod additions
+// addPod 是一个pod相关的handler
 func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (interface{}, error) {
 
 	resp := cniapi.RspAddPod{}
@@ -524,7 +529,7 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 		return resp, err
 	}
 
-	// Get labels from the kube api server
+	// 从kube api server获取labels
 	epReq, err := getEPSpec(&pInfo)
 	if err != nil {
 		log.Errorf("Error getting labels. Err: %v", err)
@@ -549,7 +554,9 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 		}
 	}()
 
-	// convert netns to pid that netlink needs
+	// 从netns获取pid(需要netlink)
+	//这里的netns是pause容器的netns(/proc/35938/ns/net)
+
 	pid, epErr := nsToPID(pInfo.NwNameSpace)
 	if epErr != nil {
 		log.Errorf("Error moving to netns. Err: %v", epErr)
@@ -558,6 +565,8 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 	}
 
 	// Set interface attributes for the new port
+	// 为新的port设置接口属性(基本上就是创建虚拟的网卡，设置ip等相关相信)
+	// func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error
 	epErr = setIfAttrs(pid, ep.PortName, ep.IPAddress, ep.IPv6Address, pInfo.IntfName)
 	if epErr != nil {
 		log.Errorf("Error setting interface attributes. Err: %v", epErr)
@@ -593,7 +602,7 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 
 	}
 
-	// Set default gateway
+	// 设置默认网关
 	epErr = setDefGw(pid, gw, ep.IPv6Gateway, gwIntf)
 	if epErr != nil {
 		log.Errorf("Error setting default gateway. Err: %v", epErr)
@@ -613,7 +622,7 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 	return resp, nil
 }
 
-// deletePod is the handler for pod deletes
+// deletePod 删除pod的heandler
 func deletePod(w http.ResponseWriter, r *http.Request, vars map[string]string) (interface{}, error) {
 
 	resp := cniapi.RspAddPod{}
