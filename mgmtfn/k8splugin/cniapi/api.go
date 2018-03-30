@@ -41,7 +41,7 @@ type CNIPodAttr struct {
 	K8sNameSpace     string `json:"K8S_POD_NAMESPACE,omitempty"`          //k8s ns
 	InfraContainerID string `json:"K8S_POD_INFRA_CONTAINER_ID,omitempty"` //pausecontainer id
 	NwNameSpace      string `json:"CNI_NETNS,omitempty"`                  //net namespace
-	IntfName         string `json:"CNI_IFNAME,omitempty"`                 //cni ifname
+	IntfName         string `json:"CNI_IFNAME,omitempty"`                 //容器内部新的网卡设备名
 }
 
 // RspAddPod contains the response to the AddPod
