@@ -134,21 +134,53 @@ func epCleanUp(req *epSpec) error {
 }
 
 // createEP 在contiv内部创建指定的Endpoint 并获取相关的网络信息，比如ip,mask,gw等
+// Tenant Network Group EndpointID Name
 func createEP(req *epSpec) (*epAttr, error) {
 
 	// 如果ep存在，抛出一个错误(网路号+.+租户号码)
 	netID := req.Network + "." + req.Tenant
+	//k8s-data-net.default-$pausecontainerid
+
+	//返回的ep相关信息
+	/*
+	   type OperEndpointState struct {
+	   	core.CommonState
+	   	NetID       string `json:"netID"`
+	   	EndpointID  string `json:"endpointID"`
+	   	ServiceName string `json:"serviceName"`
+	   	ContUUID    string `json:"contUUID"`
+	   	IPAddress   string `json:"ipAddress"`
+	   	IPv6Address string `json:"ipv6Address"`
+	   	MacAddress  string `json:"macAddress"`
+	   	HomingHost  string `json:"homingHost"`
+	   	IntfName    string `json:"intfName"`
+	   	PortName    string `json:"portName"`
+	   	VtepIP      string `json:"vtepIP"`
+	   }
+	*/
 	ep, err := utils.GetEndpoint(netID + "-" + req.EndpointID)
 	if err == nil {
 		return nil, fmt.Errorf("the EP %s already exists", req.EndpointID)
 	}
 
 	// 构建一个endpoint的请求
+	/*
+	   //master.CreateEndpointRequest结果体
+	   type CreateEndpointRequest struct {
+	   	TenantName   string          // tenant name
+	   	NetworkName  string          // network name
+	   	ServiceName  string          // service name
+	   	EndpointID   string          // Unique identifier for the endpoint
+	   	EPCommonName string          // Common name for the endpoint
+	   	ConfigEP     intent.ConfigEP // Endpoint configuration
+	   }
+	*/
+
 	mreq := master.CreateEndpointRequest{
 		TenantName:   req.Tenant,
 		NetworkName:  req.Network,
 		ServiceName:  req.Group,
-		EndpointID:   req.EndpointID,
+		EndpointID:   req.EndpointID, //pause容器id
 		EPCommonName: req.Name,
 		ConfigEP: intent.ConfigEP{
 			Container:   req.EndpointID,
@@ -158,7 +190,8 @@ func createEP(req *epSpec) (*epAttr, error) {
 	}
 
 	var mresp master.CreateEndpointResponse
-	//发送给master请求来创建endpoint,如果失败则清理网路，保证
+	//发送给master请求来创建endpoint,如果失败则清理网路。
+	//调用master先去etcd里进行存放endpoint信息
 	err = cluster.MasterPostReq("/plugin/createEndpoint", &mreq, &mresp)
 	if err != nil {
 		epCleanUp(req)
@@ -169,7 +202,8 @@ func createEP(req *epSpec) (*epAttr, error) {
 	log.Infof("Got endpoint create resp from master: %+v", mresp)
 
 	// Ask netplugin to create the endpoint
-	//告知netplugin去创建endpoint(master和plugin同时创建是为了一致性对比？)
+	//告知netplugin去创建endpoint(master和plugin同时创建是为了一致性对比
+	//由netPlugin.CreateEndpoint真正执行endpoint的操作
 	err = netPlugin.CreateEndpoint(netID + "-" + req.EndpointID)
 	if err != nil {
 		log.Errorf("Endpoint creation failed. Error: %s", err)
@@ -178,6 +212,42 @@ func createEP(req *epSpec) (*epAttr, error) {
 	}
 
 	//获取创建好的endpoint
+
+	/*
+		   type OperEndpointState struct {
+		   	core.CommonState
+		   	NetID       string `json:"netID"` 			//网络号netID
+		   	EndpointID  string `json:"endpointID"`		//endpoint 其实就是pauseconid
+		   	ServiceName string `json:"serviceName"`
+		   	ContUUID    string `json:"contUUID"`
+		   	IPAddress   string `json:"ipAddress"`
+		   	IPv6Address string `json:"ipv6Address"`
+		   	MacAddress  string `json:"macAddress"`
+		   	HomingHost  string `json:"homingHost"`
+		   	IntfName    string `json:"intfName"`
+		   	PortName    string `json:"portName"`
+		   	VtepIP      string `json:"vtepIP"`
+		   }
+
+		func GetEndpoint(epID string) (*drivers.OperEndpointState, error) {
+			// Get hold of the state driver
+			stateDriver, err := GetStateDriver()
+			if err != nil {
+				return nil, err
+			}
+
+			operEp := &drivers.OperEndpointState{}
+			operEp.StateDriver = stateDriver
+			err = operEp.Read(epID)
+			if err != nil {
+				return nil, err
+			}
+
+			return operEp, nil
+		}
+	*/
+
+	// epID := k8s-data-net.default-$pausecontainerid
 	ep, err = utils.GetEndpoint(netID + "-" + req.EndpointID)
 	if err != nil {
 		epCleanUp(req)
@@ -187,6 +257,32 @@ func createEP(req *epSpec) (*epAttr, error) {
 	log.Debug(ep)
 	// need to get the subnetlen from nw state.
 	//从nw状态中获取子网长度subnetlen
+	//netID := k8s-data-net.default
+	//func GetNetwork(networkID string) (*mastercfg.CfgNetworkState, error)
+	/*
+		type CfgNetworkState struct {
+			core.CommonState
+			Tenant        string          `json:"tenant"`
+			NetworkName   string          `json:"networkName"`
+			NwType        string          `json:"nwType"`
+			PktTagType    string          `json:"pktTagType"`
+			PktTag        int             `json:"pktTag"`
+			ExtPktTag     int             `json:"extPktTag"`
+			SubnetIP      string          `json:"subnetIP"`
+			SubnetLen     uint            `json:"subnetLen"`    //子网掩码长度24
+			Gateway       string          `json:"gateway"`
+			IPAddrRange   string          `json:"ipAddrRange"`
+			EpAddrCount   int             `json:"epAddrCount"`
+			EpCount       int             `json:"epCount"`
+			IPAllocMap    bitset.BitSet   `json:"ipAllocMap"`
+			IPv6Subnet    string          `json:"ipv6SubnetIP"`
+			IPv6SubnetLen uint            `json:"ipv6SubnetLen"`
+			IPv6Gateway   string          `json:"ipv6Gateway"`
+			IPv6AllocMap  map[string]bool `json:"ipv6AllocMap"`
+			IPv6LastHost  string          `json:"ipv6LastHost"`
+			NetworkTag    string          `json:"networkTag"`
+		}
+	*/
 	nw, err := utils.GetNetwork(netID)
 	if err != nil {
 		epCleanUp(req)
@@ -478,6 +574,9 @@ func setDefGw(pid int, gw, gw6, intfName string) error {
 }
 
 // getEPSpec 使用pod的属性信息获取EP的相关信息
+// Name K8sNameSpace InfraContainerID NwNameSpace IntfName
+
+// 返回的信息
 func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
 	resp := epSpec{}
 
@@ -499,8 +598,8 @@ func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
 	resp.Tenant = tenant
 	resp.Network = netw
 	resp.Group = epg
-	resp.EndpointID = pInfo.InfraContainerID  //pause-container id
-	resp.Name = pInfo.Name   //k8s-name
+	resp.EndpointID = pInfo.InfraContainerID //pause-container id
+	resp.Name = pInfo.Name                   //k8s-name
 
 	return &resp, nil
 }
@@ -513,6 +612,16 @@ func setErrorResp(resp *cniapi.RspAddPod, msg string, err error) {
 
 // addPod 是一个pod相关的handler
 func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (interface{}, error) {
+	/*
+	   type RspAddPod struct {
+	   	Result      uint   `json:"result,omitempty"`      //result
+	   	EndpointID  string `json:"endpointid,omitempty"`  //endpoint id
+	   	IPAddress   string `json:"ipaddress,omitempty"`   //ip v4
+	   	IPv6Address string `json:"ipv6address,omitempty"` //ip v6
+	   	ErrMsg      string `json:"errmsg,omitempty"`      //err msg
+	   	ErrInfo     string `json:"errinfo,omitempty"`     //err info
+	   }
+	*/
 
 	resp := cniapi.RspAddPod{}
 
@@ -524,11 +633,58 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 		return resp, err
 	}
 
+	/*
+
+	   type CNIPodAttr struct {
+	   	Name             string `json:"K8S_POD_NAME,omitempty"`               // podname ->appname
+	   	K8sNameSpace     string `json:"K8S_POD_NAMESPACE,omitempty"`          //k8s ns
+	   	InfraContainerID string `json:"K8S_POD_INFRA_CONTAINER_ID,omitempty"` //pausecontainer id
+	   	NwNameSpace      string `json:"CNI_NETNS,omitempty"`                  //net namespace
+	   	IntfName         string `json:"CNI_IFNAME,omitempty"`                 //容器内部新的网卡设备名
+	   }
+	*/
 	pInfo := cniapi.CNIPodAttr{}
 	if err := json.Unmarshal(content, &pInfo); err != nil {
 		return resp, err
 	}
 
+	/*
+			   func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
+			   	resp := epSpec{}
+
+			   	// 从kubeapi server获取相关的label
+			   	epg, err := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+			   		"io.contiv.net-group")
+			   	if err != nil {
+			   		log.Errorf("Error getting epg. Err: %v", err)
+			   		return &resp, err
+			   	}
+
+			   	// Safe to ignore the error return for subsequent invocations of GetPodLabel
+			   	// 安全的忽略随后的GetPodLabel的调用
+			   	netw, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+			   		"io.contiv.network")
+			   	tenant, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+			   		"io.contiv.tenant")
+			   	log.Infof("labels is %s/%s/%s for pod %s\n", tenant, netw, epg, pInfo.Name)
+			   	resp.Tenant = tenant
+			   	resp.Network = netw
+			   	resp.Group = epg
+			   	resp.EndpointID = pInfo.InfraContainerID  //pause-container id
+			   	resp.Name = pInfo.Name   //k8s-name
+
+			   	return &resp, nil
+			   }
+
+
+		type epSpec struct {
+			Tenant     string `json:"tenant,omitempty"`
+			Network    string `json:"network,omitempty"`
+			Group      string `json:"group,omitempty"`
+			EndpointID string `json:"endpointid,omitempty"`
+			Name       string `json:"name,omitempty"`
+		}
+	*/
 	// 从kube api server获取labels
 	epReq, err := getEPSpec(&pInfo)
 	if err != nil {
@@ -536,6 +692,9 @@ func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (int
 		setErrorResp(&resp, "Error getting labels", err)
 		return resp, err
 	}
+	/*
+	   func createEP(req *epSpec) (*epAttr, error) {
+	*/
 
 	ep, err := createEP(epReq)
 	if err != nil {

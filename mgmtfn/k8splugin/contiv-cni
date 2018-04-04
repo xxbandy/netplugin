@@ -1,0 +1,300 @@
+## contiv创建虚拟网卡流程
+
+[cni-plugin驱动](https://github.com/xxbandy/netplugin/blob/master/mgmtfn/k8splugin/driver.go)
+
+### 入口函数为addPod
+
+
+```
+func addPod(w http.ResponseWriter, r *http.Request, vars map[string]string) (interface{}, error)
+```
+
+#### 构建容器相关信息
+构造`resp`和`pInfo`,分别为响应数据和pod的相关信息
+```
+    /*
+       type RspAddPod struct {
+        Result      uint   `json:"result,omitempty"`      //result
+        EndpointID  string `json:"endpointid,omitempty"`  //endpoint id
+        IPAddress   string `json:"ipaddress,omitempty"`   //ip v4
+        IPv6Address string `json:"ipv6address,omitempty"` //ip v6
+        ErrMsg      string `json:"errmsg,omitempty"`      //err msg
+        ErrInfo     string `json:"errinfo,omitempty"`     //err info
+       }
+    */
+
+    resp := cniapi.RspAddPod{}
+
+    logEvent("add pod")
+
+    content, err := ioutil.ReadAll(r.Body)
+    if err != nil {
+        log.Errorf("Failed to read request: %v", err)
+        return resp, err
+    }
+
+    /*
+
+       type CNIPodAttr struct {
+        Name             string `json:"K8S_POD_NAME,omitempty"`               // podname ->appname
+        K8sNameSpace     string `json:"K8S_POD_NAMESPACE,omitempty"`          //k8s ns
+        InfraContainerID string `json:"K8S_POD_INFRA_CONTAINER_ID,omitempty"` //pausecontainer id
+        NwNameSpace      string `json:"CNI_NETNS,omitempty"`                  //net namespace
+        IntfName         string `json:"CNI_IFNAME,omitempty"`                 //容器内部新的网卡设备名
+       }
+    */
+    pInfo := cniapi.CNIPodAttr{}
+    if err := json.Unmarshal(content, &pInfo); err != nil {
+        return resp, err
+    }
+
+```
+
+
+#### 根据podinfo信息获取EndPoint等相关信息
+```
+    /*
+               func getEPSpec(pInfo *cniapi.CNIPodAttr) (*epSpec, error) {
+                resp := epSpec{}
+
+                // 从kubeapi server获取相关的label
+                // 必须通过k8s的客户端来获取endpoint;
+                epg, err := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+                    "io.contiv.net-group")
+                if err != nil {
+                    log.Errorf("Error getting epg. Err: %v", err)
+                    return &resp, err
+                }
+
+                // Safe to ignore the error return for subsequent invocations of GetPodLabel
+                // 安全的忽略随后的GetPodLabel的调用
+                netw, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+                    "io.contiv.network")
+                tenant, _ := kubeAPIClient.GetPodLabel(pInfo.K8sNameSpace, pInfo.Name,
+                    "io.contiv.tenant")
+                log.Infof("labels is %s/%s/%s for pod %s\n", tenant, netw, epg, pInfo.Name)
+                resp.Tenant = tenant
+                resp.Network = netw
+                resp.Group = epg
+                resp.EndpointID = pInfo.InfraContainerID  //pause-container id
+                resp.Name = pInfo.Name   //k8s-name
+
+                return &resp, nil
+               }
+
+        //需要获取EndpointID
+        type epSpec struct {
+            Tenant     string `json:"tenant,omitempty"`
+            Network    string `json:"network,omitempty"`
+            Group      string `json:"group,omitempty"`
+            EndpointID string `json:"endpointid,omitempty"`  //对应pause容器的id
+            Name       string `json:"name,omitempty"`  // 对应容器的名称
+        }
+    */
+    // 从kube api server获取labels
+    epReq, err := getEPSpec(&pInfo)
+    if err != nil {
+        log.Errorf("Error getting labels. Err: %v", err)
+        setErrorResp(&resp, "Error getting labels", err)
+        return resp, err
+    }
+
+```
+
+#### 根据endpoint的相关信息去创建endpoint()epSpec
+```
+    /*
+       func createEP(req *epSpec) (*epAttr, error) {
+
+    */
+
+    ep, err := createEP(epReq)
+    if err != nil {
+        log.Errorf("Error creating ep. Err: %v", err)
+        setErrorResp(&resp, "Error creating EP", err)
+        return resp, err
+    }
+
+    var epErr error
+
+    defer func() {
+        if epErr != nil {
+            log.Errorf("error %s, remove endpoint", epErr)
+            netPlugin.DeleteHostAccPort(epReq.EndpointID)
+            epCleanUp(epReq)
+        }
+    }()
+
+```
+
+##### createEP相关代码
+```
+/* createEP 在contiv内部创建指定的Endpoint(pausecontainerid) 
+type epSpec struct {
+            Tenant     string `json:"tenant,omitempty"`
+            Network    string `json:"network,omitempty"`
+            Group      string `json:"group,omitempty"`
+            EndpointID string `json:"endpointid,omitempty"`  //对应pause容器的id
+            Name       string `json:"name,omitempty"`  // 对应容器的名称
+}
+
+type epAttr struct {
+    IPAddress   string
+    PortName    string
+    Gateway     string
+    IPv6Address string
+    IPv6Gateway string
+}
+
+
+*/
+// 使用contiv的网络信息去创建一个指定的endpoint，并返回相应的网络信息
+func createEP(req *epSpec) (*epAttr, error) {
+
+    // 如果ep存在，抛出一个错误(网路号+.+租户号码)
+    netID := req.Network + "." + req.Tenant
+
+    //https://github.com/contiv/netplugin/utils/stateutils.go
+    ep, err := utils.GetEndpoint(netID + "-" + req.EndpointID)
+    if err == nil {
+        return nil, fmt.Errorf("the EP %s already exists", req.EndpointID)
+    }
+
+    // 构建一个endpoint的请求
+    mreq := master.CreateEndpointRequest{
+        TenantName:   req.Tenant,
+        NetworkName:  req.Network,
+        ServiceName:  req.Group,
+        EndpointID:   req.EndpointID,
+        EPCommonName: req.Name,
+        ConfigEP: intent.ConfigEP{
+            Container:   req.EndpointID,
+            Host:        pluginHost,
+            ServiceName: req.Group,
+        },
+    }
+
+    var mresp master.CreateEndpointResponse
+    //发送给master请求来创建endpoint,如果失败则清理网路，保证
+    err = cluster.MasterPostReq("/plugin/createEndpoint", &mreq, &mresp)
+    if err != nil {
+        epCleanUp(req)
+        return nil, err
+    }
+
+    // this response should contain IPv6 if the underlying network is configured with IPv6
+    log.Infof("Got endpoint create resp from master: %+v", mresp)
+
+    // Ask netplugin to create the endpoint
+    //告知netplugin去创建endpoint(master和plugin同时创建是为了一致性对比？)
+    err = netPlugin.CreateEndpoint(netID + "-" + req.EndpointID)
+    if err != nil {
+        log.Errorf("Endpoint creation failed. Error: %s", err)
+        epCleanUp(req)
+        return nil, err
+    }
+
+    //获取创建好的endpoint
+    ep, err = utils.GetEndpoint(netID + "-" + req.EndpointID)
+    if err != nil {
+        epCleanUp(req)
+        return nil, err
+    }
+
+    log.Debug(ep)
+    // need to get the subnetlen from nw state.
+    //从nw状态中获取子网长度subnetlen
+    nw, err := utils.GetNetwork(netID)
+    if err != nil {
+        epCleanUp(req)
+        return nil, err
+    }
+
+    epResponse := epAttr{}
+    //port，ip，wg等香菇眼信息的赋值
+    epResponse.PortName = ep.PortName
+    epResponse.IPAddress = ep.IPAddress + "/" + strconv.Itoa(int(nw.SubnetLen))
+    epResponse.Gateway = nw.Gateway
+
+    if ep.IPv6Address != "" {
+        epResponse.IPv6Address = ep.IPv6Address + "/" + strconv.Itoa(int(nw.IPv6SubnetLen))
+        epResponse.IPv6Gateway = nw.IPv6Gateway
+    }
+
+    return &epResponse, nil
+}
+```
+
+#### 根据podInfo，ep相关信息为容器创激活并连设置络
+
+```
+    // 从netns获取pid(需要netlink)
+    //这里的netns是pause容器的netns(/proc/35938/ns/net)
+
+    pid, epErr := nsToPID(pInfo.NwNameSpace)
+    if epErr != nil {
+        log.Errorf("Error moving to netns. Err: %v", epErr)
+        setErrorResp(&resp, "Error moving to netns", epErr)
+        return resp, epErr
+    }
+
+    // Set interface attributes for the new port
+    // 为新的网络接口设置属性(基本上就是激活网卡，并设置ip等相关相信)
+    // func setIfAttrs(pid int, ifname, cidr, cidr6, newname string) error
+    epErr = setIfAttrs(pid, ep.PortName, ep.IPAddress, ep.IPv6Address, pInfo.IntfName)
+    if epErr != nil {
+        log.Errorf("Error setting interface attributes. Err: %v", epErr)
+        setErrorResp(&resp, "Error setting interface attributes", epErr)
+        return resp, epErr
+    }
+
+    //TODO: Host access needs to be enabled for IPv6
+    // if Gateway is not specified on the nw, use the host gateway
+    //容器内部网卡名称`eth0`
+    gwIntf := pInfo.IntfName
+    gw := ep.Gateway
+    if gw == "" {
+        hostIf := netutils.GetHostIntfName(ep.PortName)
+        hostIP, err := netPlugin.CreateHostAccPort(hostIf, ep.IPAddress)
+        if err != nil {
+            log.Errorf("Error setting host access. Err: %v", err)
+        } else {
+            err = setIfAttrs(pid, hostIf, hostIP, "", "host1")
+            if err != nil {
+                log.Errorf("Move to pid %d failed", pid)
+            } else {
+                gw, err = netutils.HostIPToGateway(hostIP)
+                if err != nil {
+                    log.Errorf("Error getting host GW ip: %s, err: %v", hostIP, err)
+                } else {
+                    gwIntf = "host1"
+                    // make sure service subnet points to eth0
+                    svcSubnet := contivK8Config.SvcSubnet
+                    addStaticRoute(pid, svcSubnet, pInfo.IntfName)
+                }
+            }
+        }
+
+    }
+
+    // 设置默认网关
+    epErr = setDefGw(pid, gw, ep.IPv6Gateway, gwIntf)
+    if epErr != nil {
+        log.Errorf("Error setting default gateway. Err: %v", epErr)
+        setErrorResp(&resp, "Error setting default gateway", epErr)
+        return resp, epErr
+    }
+
+    resp.Result = 0
+    resp.IPAddress = ep.IPAddress
+
+    if ep.IPv6Address != "" {
+        resp.IPv6Address = ep.IPv6Address
+    }
+
+    resp.EndpointID = pInfo.InfraContainerID
+
+    return resp, nil
+}
+
+```

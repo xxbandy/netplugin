@@ -226,7 +226,8 @@ func (c *APIClient) fetchPodLabels(ns, name string) error {
 	return nil
 }
 
-// GetPodLabel retrieves the specified label
+// GetPodLabel 获取指定的label
+// k8s的namespace和pod名称以及标签"io.contiv.net-group"
 func (c *APIClient) GetPodLabel(ns, name, label string) (string, error) {
 
 	// If cache does not match, fetch

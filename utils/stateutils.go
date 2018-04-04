@@ -6,12 +6,31 @@ import (
 )
 
 // GetEndpoint is a utility that reads the EP oper state
+// epID := k8s-data-net.default-$pausecontainerid
 func GetEndpoint(epID string) (*drivers.OperEndpointState, error) {
 	// Get hold of the state driver
 	stateDriver, err := GetStateDriver()
 	if err != nil {
 		return nil, err
 	}
+
+	/*
+	   type OperEndpointState struct {
+	   	core.CommonState
+	   	NetID       string `json:"netID"`
+	   	EndpointID  string `json:"endpointID"`
+	   	ServiceName string `json:"serviceName"`
+	   	ContUUID    string `json:"contUUID"`
+	   	IPAddress   string `json:"ipAddress"`
+	   	IPv6Address string `json:"ipv6Address"`
+	   	MacAddress  string `json:"macAddress"`
+	   	HomingHost  string `json:"homingHost"`
+	   	IntfName    string `json:"intfName"`
+	   	PortName    string `json:"portName"`
+	   	VtepIP      string `json:"vtepIP"`
+	   }
+
+	*/
 
 	operEp := &drivers.OperEndpointState{}
 	operEp.StateDriver = stateDriver

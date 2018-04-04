@@ -96,6 +96,7 @@ func GetLeaderNetmaster() (string, error) {
 }
 
 // masterReq makes a POST/DELETE request to master node
+// masterReq 给master节点构造一个post/delete请求
 func masterReq(path string, req interface{}, resp interface{}, isDel bool) error {
 	const retryCount = 3
 
@@ -158,6 +159,7 @@ func masterReq(path string, req interface{}, resp interface{}, isDel bool) error
 }
 
 // MasterPostReq makes a POST request to master node
+// 构建post请求
 func MasterPostReq(path string, req interface{}, resp interface{}) error {
 	return masterReq(path, req, resp, false)
 }
